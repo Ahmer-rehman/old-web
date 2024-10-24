@@ -21,6 +21,7 @@ import {
     SearchResult,
     IEvent,
 } from "matrix-js-sdk/src/matrix";
+import { CryptoApi, UserVerificationStatus } from "matrix-js-sdk/src/crypto-api";
 import { KnownMembership } from "matrix-js-sdk/src/types";
 import { fireEvent, render, screen, RenderResult, waitForElementToBeRemoved, waitFor } from "jest-matrix-react";
 import userEvent from "@testing-library/user-event";
@@ -72,14 +73,14 @@ describe("RoomView", () => {
     let rooms: Map<string, Room>;
     let roomCount = 0;
     let stores: SdkContextClass;
+    let cryptoApi: CryptoApi;
 
     // mute some noise
     filterConsole("RVS update", "does not have an m.room.create event", "Current version: 1", "Version capability");
 
     beforeEach(() => {
         mockPlatformPeg({ reload: () => {} });
-        stubClient();
-        cli = mocked(MatrixClientPeg.safeGet());
+        cli = mocked(stubClient());
 
         room = new Room(`!${roomCount++}:example.org`, cli, "@alice:example.org");
         jest.spyOn(room, "findPredecessor");
@@ -97,6 +98,7 @@ describe("RoomView", () => {
         stores.rightPanelStore.useUnitTestClient(cli);
 
         jest.spyOn(VoipUserMapper.sharedInstance(), "getVirtualRoomForRoom").mockResolvedValue(undefined);
+        cryptoApi = cli.getCrypto()!;
         jest.spyOn(cli, "getCrypto").mockReturnValue(undefined);
     });
 
@@ -230,8 +232,9 @@ describe("RoomView", () => {
 
     it("updates url preview visibility on encryption state change", async () => {
         room.getMyMembership = jest.fn().mockReturnValue(KnownMembership.Join);
+        jest.spyOn(cli, "getCrypto").mockReturnValue(cryptoApi);
         // we should be starting unencrypted
-        expect(cli.isRoomEncrypted(room.roomId)).toEqual(false);
+        expect(await cli.getCrypto()?.isEncryptionEnabledInRoom(room.roomId)).toEqual(false);
 
         const roomViewInstance = await getRoomViewInstance();
 
@@ -246,10 +249,10 @@ describe("RoomView", () => {
         expect(roomViewInstance.state.showUrlPreview).toBe(true);
 
         // now enable encryption
-        cli.isRoomEncrypted.mockReturnValue(true);
+        jest.spyOn(cli.getCrypto()!, "isEncryptionEnabledInRoom").mockResolvedValue(true);
 
         // and fake an encryption event into the room to prompt it to re-check
-        room.addLiveEvents([
+        await room.addLiveEvents([
             new MatrixEvent({
                 type: "m.room.encryption",
                 sender: cli.getUserId()!,
@@ -341,6 +344,11 @@ describe("RoomView", () => {
 
             describe("that is encrypted", () => {
                 beforeEach(() => {
+                    jest.spyOn(cli, "getCrypto").mockReturnValue(cryptoApi);
+                    jest.spyOn(cli.getCrypto()!, "isEncryptionEnabledInRoom").mockResolvedValue(true);
+                    jest.spyOn(cli.getCrypto()!, "getUserVerificationStatus").mockResolvedValue(
+                        new UserVerificationStatus(false, true, false),
+                    );
                     mocked(cli.isRoomEncrypted).mockReturnValue(true);
                     localRoom.encrypted = true;
                     localRoom.currentState.setStateEvents([
@@ -402,7 +410,8 @@ describe("RoomView", () => {
             ]);
             jest.spyOn(DMRoomMap.shared(), "getUserIdForRoomId").mockReturnValue(cli.getSafeUserId());
             jest.spyOn(DMRoomMap.shared(), "getRoomIds").mockReturnValue(new Set([room.roomId]));
-            mocked(cli).isRoomEncrypted.mockReturnValue(true);
+            jest.spyOn(cli, "getCrypto").mockReturnValue(cryptoApi);
+            jest.spyOn(cli.getCrypto()!, "isEncryptionEnabledInRoom").mockResolvedValue(true);
             await renderRoomView();
         });
 

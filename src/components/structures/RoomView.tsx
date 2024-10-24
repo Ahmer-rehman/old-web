@@ -233,6 +233,10 @@ export interface IRoomState {
     liveTimeline?: EventTimeline;
     narrow: boolean;
     msc3946ProcessDynamicPredecessor: boolean;
+    /**
+     * Wether the room is encrypted or not.
+     */
+    isRoomEncrypted: boolean;
 
     canAskToJoin: boolean;
     promptAskToJoin: boolean;
@@ -417,6 +421,7 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
             canAskToJoin: this.askToJoinEnabled,
             promptAskToJoin: false,
             viewRoomOpts: { buttons: [] },
+            isRoomEncrypted: false,
         };
 
         this.dispatcherRef = dis.register(this.onAction);
@@ -903,13 +908,17 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
         return isManuallyShown && widgets.length > 0;
     }
 
-    public componentDidMount(): void {
+    public async componentDidMount(): Promise<void> {
         this.onRoomViewStoreUpdate(true);
 
+        const isRoomEncrypted = Boolean(
+            this.state.roomId && (await this.context.client?.getCrypto()?.isEncryptionEnabledInRoom(this.state.roomId)),
+        );
         const call = this.getCallForRoom();
         const callState = call?.state;
         this.setState({
             callState,
+            isRoomEncrypted,
         });
 
         this.context.legacyCallHandler.on(LegacyCallHandlerEvent.CallState, this.onCallState);
@@ -1405,10 +1414,12 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
         });
     }
 
-    private updatePreviewUrlVisibility({ roomId }: Room): void {
+    private async updatePreviewUrlVisibility({ roomId }: Room): Promise<void> {
+        const isRoomEncrypted = Boolean(await this.context.client?.getCrypto()?.isEncryptionEnabledInRoom(roomId));
         // URL Previews in E2EE rooms can be a privacy leak so use a different setting which is per-room explicit
-        const key = this.context.client?.isRoomEncrypted(roomId) ? "urlPreviewsEnabled_e2ee" : "urlPreviewsEnabled";
+        const key = isRoomEncrypted ? "urlPreviewsEnabled_e2ee" : "urlPreviewsEnabled";
         this.setState({
+            isRoomEncrypted,
             showUrlPreview: SettingsStore.getValue(key, roomId),
         });
     }
@@ -1452,7 +1463,11 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
     };
 
     private async updateE2EStatus(room: Room): Promise<void> {
-        if (!this.context.client?.isRoomEncrypted(room.roomId)) return;
+        if (!this.context.client) return;
+
+        const isRoomEncrypted = Boolean(await this.context.client.getCrypto()?.isEncryptionEnabledInRoom(room.roomId));
+        this.setState({ isRoomEncrypted });
+        if (!isRoomEncrypted) return;
 
         // If crypto is not currently enabled, we aren't tracking devices at all,
         // so we don't know what the answer is. Let's error on the safe side and show
@@ -2243,7 +2258,7 @@ export class RoomView extends React.Component<IRoomProps, IRoomState> {
                     searchInfo={this.state.search}
                     onCancelClick={this.onCancelSearchClick}
                     onSearchScopeChange={this.onSearchScopeChange}
-                    isRoomEncrypted={this.context.client.isRoomEncrypted(this.state.room.roomId)}
+                    isRoomEncrypted={this.state.isRoomEncrypted}
                 />
             );
         } else if (showRoomUpgradeBar) {
